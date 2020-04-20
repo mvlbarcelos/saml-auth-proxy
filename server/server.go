@@ -7,10 +7,11 @@ import (
 	"github.com/crewjam/saml"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/pkg/errors"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
+	"time"
+	"os"
 )
 
 type Config struct {
@@ -51,7 +52,12 @@ func Start(cfg *Config) error {
 		return errors.Wrap(err, "Failed to parse base URL")
 	}
 
-	httpClient, err := setupHttpClient(cfg.IdpCaPath)
+	proxyURL, err := url.Parse(os.Getenv("HTTP_PROXY"))
+	if err != nil {
+		return errors.Wrap(err, "Failed to parse proxy URL")
+	}
+
+	httpClient, err := setupHttpClient(proxyURL)
 	if err != nil {
 		return errors.Wrap(err, "Failed to setup HTTP client")
 	}
@@ -96,31 +102,18 @@ func Start(cfg *Config) error {
 	return http.ListenAndServe(cfg.Bind, nil)
 }
 
-func setupHttpClient(idpCaFile string) (*http.Client, error) {
-	if idpCaFile == "" {
-		return nil, nil
+func setupHttpClient(proxyURL *url.URL) (*http.Client, error) {
+  timeout := time.Duration(20 * time.Second)
+	tr := &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{
+			Renegotiation:      tls.RenegotiateOnceAsClient,
+		},
 	}
 
-	rootCAs, _ := x509.SystemCertPool()
-	if rootCAs == nil {
-		rootCAs = x509.NewCertPool()
+	httpClient := &http.Client{
+			Timeout:   timeout,
+			Transport: tr,
 	}
-
-	certs, err := ioutil.ReadFile(idpCaFile)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to read IdP CA file")
-	}
-
-	if ok := rootCAs.AppendCertsFromPEM(certs); !ok {
-		log.Println("INF No certs appended, using system certs only")
-	}
-
-	config := &tls.Config{
-		RootCAs: rootCAs,
-	}
-
-	tr := &http.Transport{TLSClientConfig: config}
-	client := &http.Client{Transport: tr}
-
-	return client, nil
+	return httpClient, nil
 }
